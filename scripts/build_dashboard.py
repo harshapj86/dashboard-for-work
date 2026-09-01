@@ -173,23 +173,43 @@ def extract_gp_true():
 def extract_targets(xl):
     targets = {'revenue': {}, 'gp': {}, 'csat': {}}
     sheet_map = {'Revenue Target': 'revenue', 'GP Target': 'gp', 'CSAT Target': 'csat'}
+
+    def parse_month_cell(v):
+        """Accepts a text label like 'Jun 24' or a native Excel date — Excel
+        sometimes silently converts one header cell to a date while its
+        neighbors stay text, so both forms must be handled per-column."""
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        if hasattr(v, 'year') and hasattr(v, 'month'):
+            return v.year, v.month
+        return parse_month(v)
+
     for sheet_name, key in sheet_map.items():
         if sheet_name not in xl.sheet_names:
             continue
-        d = pd.read_excel(xl, sheet_name=sheet_name, header=3)  # header row 4 (1-indexed) in our template
-        d.columns = [str(c).strip() for c in d.columns]
-        if 'Branch ID' not in d.columns:
+        # header=None here — we parse the header row ourselves (via parse_month_cell)
+        # before pandas' column-dedup logic can stringify/rename datetime headers.
+        raw = pd.read_excel(xl, sheet_name=sheet_name, header=None)
+        header_row_idx = 3  # row 4 (1-indexed) in our template
+        header_vals = raw.iloc[header_row_idx].tolist()
+        branch_col_idx = None
+        for i, v in enumerate(header_vals):
+            if str(v).strip() == 'Branch ID':
+                branch_col_idx = i
+                break
+        if branch_col_idx is None:
             continue
-        month_cols = [c for c in d.columns if c != 'Branch ID']
-        for _, row in d.iterrows():
-            branch = row['Branch ID']
+        month_col_idxs = [i for i in range(len(header_vals)) if i != branch_col_idx]
+        data = raw.iloc[header_row_idx + 1:]
+        for _, row in data.iterrows():
+            branch = row[branch_col_idx]
             if pd.isna(branch):
                 continue
-            for mc in month_cols:
-                val = row[mc]
+            for i in month_col_idxs:
+                val = row[i]
                 if pd.isna(val):
                     continue
-                pm = parse_month(mc)
+                pm = parse_month_cell(header_vals[i])
                 if pm is None:
                     continue
                 yr, mon = pm
