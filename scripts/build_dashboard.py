@@ -117,16 +117,25 @@ def load_clean():
 # ---------------------------------------------------------------
 def extract_gp_true():
     wb = openpyxl.load_workbook(SRC, data_only=True)
-    if 'GP ' not in wb.sheetnames:
+    gp_sheet_name = 'GP' if 'GP' in wb.sheetnames else ('GP ' if 'GP ' in wb.sheetnames else None)
+    if gp_sheet_name is None:
         return {}
-    ws = wb['GP ']
+    ws = wb[gp_sheet_name]
+
+    def parse_month_cell(v):
+        """Accepts a text label like 'April 24' or a native datetime cell."""
+        if v is None:
+            return None
+        if hasattr(v, 'year') and hasattr(v, 'month'):
+            return v.year, v.month
+        return parse_month(v)
 
     def extract_block(header_row, data_start, data_end):
         header = list(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))[0]
         month_cols = header[1:13]
         month_keys = []
         for m in month_cols:
-            pm = parse_month(m)
+            pm = parse_month_cell(m)
             month_keys.append(pm[0]*100+pm[1] if pm else None)
         out = {}
         for row in ws.iter_rows(min_row=data_start, max_row=data_end, values_only=True):
@@ -143,17 +152,16 @@ def extract_gp_true():
         return out
 
     gp_true = {}
-    # First block starts at row 3 (header), data rows follow until a blank/Grand Total row.
-    # We scan for header rows containing 12 month-like labels rather than hardcoding row numbers,
-    # so this survives minor sheet edits.
+    # Scan for every header row in the sheet — handles multiple stacked FY blocks,
+    # whichever row-0 label they use ("Branch ID" or "Centre Name"), and whether
+    # month columns are text labels ("April 24") or native Excel date cells.
     header_rows = []
     for r in range(1, ws.max_row + 1):
         row = list(ws.iter_rows(min_row=r, max_row=r, values_only=True))[0]
-        if row[0] == 'Branch ID' and row[1] is not None:
+        if row[0] in ('Branch ID', 'Centre Name') and row[1] is not None:
             header_rows.append(r)
-    for hr in header_rows:
-        # find extent of this block: rows until next header row or sheet end
-        next_header = min([h for h in header_rows if h > hr], default=ws.max_row + 1)
+    for i, hr in enumerate(header_rows):
+        next_header = header_rows[i + 1] if i + 1 < len(header_rows) else ws.max_row + 2
         data_end = next_header - 2  # leave room for a trailing Grand Total row
         gp_true.update(extract_block(hr, hr + 1, data_end))
     return gp_true
